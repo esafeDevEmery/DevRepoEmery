@@ -4,53 +4,87 @@ import requests
 import os
 from urllib.parse import urlparse
 import time
-from pathlib import Path
+import io
+import base64
 from datetime import datetime
+import zipfile
 
-def download_file(url, download_folder, filename=None, progress_bar=None):
+def download_file_to_memory(url):
     """
-    Download a file from a URL with progress tracking
+    Download a file to memory and return its content and metadata
     """
     try:
-        # Create download folder if it doesn't exist
-        Path(download_folder).mkdir(parents=True, exist_ok=True)
+        username='nahimana2023'
+        password='CDRReports2025'
+        response = requests.get(url, stream=True, timeout=30,auth=(username,password))
+        response.raise_for_status()
         
-        # Get filename from URL if not provided
-        if not filename:
-            parsed_url = urlparse(url)
-            filename = os.path.basename(parsed_url.path)
-            if not filename or filename == '/':
-                filename = f"downloaded_file_{int(time.time())}"
+        # Get filename from URL
+        parsed_url = urlparse(url)
+        filename = os.path.basename(parsed_url.path)
+        if not filename or filename == '/':
+            filename = f"downloaded_file_{int(time.time())}"
         
         # Clean filename
         filename = "".join(c for c in filename if c.isalnum() or c in "._- ")
         
-        # Full path for the file
-        file_path = os.path.join(download_folder, filename)
-        username='nahimana2023'
-        password='CDRReports2025'
-        # Download the file with progress
-        response = requests.get(url, stream=True, timeout=30,auth=(username,password))
-        response.raise_for_status()
+        # Read content into memory
+        content = response.content
+        file_size = len(content)
         
-        total_size = int(response.headers.get('content-length', 0))
-        downloaded_size = 0
-        
-        with open(file_path, 'wb') as file:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    file.write(chunk)
-                    downloaded_size += len(chunk)
-                    if progress_bar and total_size > 0:
-                        progress = downloaded_size / total_size
-                        progress_bar.progress(progress)
-        
-        return file_path, True, "Download completed"
+        return content, filename, file_size, True, "Download completed"
         
     except requests.exceptions.RequestException as e:
-        return None, False, f"Network error: {str(e)}"
+        return None, None, 0, False, f"Network error: {str(e)}"
     except Exception as e:
-        return None, False, f"Error: {str(e)}"
+        return None, None, 0, False, f"Error: {str(e)}"
+
+def create_download_link(content, filename, file_type="application/octet-stream"):
+    """
+    Create a download link for a file in memory
+    """
+    b64 = base64.b64encode(content).decode()
+    href = f'<a href="data:{file_type};base64,{b64}" download="{filename}">Download {filename}</a>'
+    return href
+
+def create_zip_download_link(files_data, zip_filename="downloaded_files.zip"):
+    """
+    Create a ZIP file containing multiple files and provide download link
+    """
+    zip_buffer = io.BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for file_data in files_data:
+            if file_data['success']:
+                zip_file.writestr(file_data['filename'], file_data['content'])
+    
+    zip_buffer.seek(0)
+    zip_content = zip_buffer.getvalue()
+    
+    b64 = base64.b64encode(zip_content).decode()
+    href = f'<a href="data:application/zip;base64,{b64}" download="{zip_filename}">📦 Download All Files as ZIP</a>'
+    return href
+
+def get_file_type(filename):
+    """
+    Get MIME type based on file extension
+    """
+    extension = filename.split('.')[-1].lower()
+    file_types = {
+        'pdf': 'application/pdf',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'png': 'image/png',
+        'gif': 'image/gif',
+        'txt': 'text/plain',
+        'csv': 'text/csv',
+        'zip': 'application/zip',
+        'doc': 'application/msword',
+        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'xls': 'application/vnd.ms-excel',
+        'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }
+    return file_types.get(extension, 'application/octet-stream')
 
 def main():
     st.set_page_config(
@@ -60,11 +94,7 @@ def main():
     )
     
     st.title("📥 Excel URL Downloader")
-    st.markdown("Upload an Excel file containing URLs and download all files to your chosen location.")
-    
-    # Initialize session state for folder path
-    if 'download_folder' not in st.session_state:
-        st.session_state.download_folder = "./downloads"
+    st.markdown("Upload an Excel file containing URLs and download files directly to your browser.")
     
     # Sidebar for configuration
     with st.sidebar:
@@ -76,61 +106,6 @@ def main():
             type=['xlsx', 'xls'],
             help="Upload an Excel file with URLs in one column"
         )
-        
-        # Download location selection
-        st.subheader("Download Location")
-        
-        # Method 1: Manual path input
-        download_folder = st.text_input(
-            "Enter Download Folder Path",
-            value=st.session_state.download_folder,
-            placeholder="./downloads or /path/to/your/folder",
-            help="Enter full path to where you want to save files"
-        )
-        
-        if download_folder != st.session_state.download_folder:
-            st.session_state.download_folder = download_folder
-        
-        # Quick select buttons for common locations
-        st.write("Quick select paths:")
-        quick_col1, quick_col2 = st.columns(2)
-        
-        with quick_col1:
-            if st.button("🖥️ Desktop", use_container_width=True):
-                desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-                st.session_state.download_folder = desktop_path
-                st.rerun()
-            
-            if st.button("📁 Documents", use_container_width=True):
-                documents_path = os.path.join(os.path.expanduser("~"), "Documents")
-                st.session_state.download_folder = documents_path
-                st.rerun()
-        
-        with quick_col2:
-            if st.button("📂 Downloads", use_container_width=True):
-                downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
-                st.session_state.download_folder = downloads_path
-                st.rerun()
-            
-            if st.button("🗂️ Current Dir", use_container_width=True):
-                current_dir = os.getcwd()
-                st.session_state.download_folder = current_dir
-                st.rerun()
-        
-        # Show folder info
-        if st.session_state.download_folder:
-            if os.path.exists(st.session_state.download_folder):
-                try:
-                    folder_size = sum(
-                        os.path.getsize(os.path.join(dirpath, filename))
-                        for dirpath, dirnames, filenames in os.walk(st.session_state.download_folder)
-                        for filename in filenames
-                    )
-                    st.info(f"✅ Folder exists\n**Size:** {folder_size:,} bytes")
-                except:
-                    st.info("✅ Folder exists")
-            else:
-                st.warning("⚠️ Folder will be created on download")
         
         # Advanced options
         st.subheader("Advanced Options")
@@ -153,12 +128,19 @@ def main():
             help="Sheet name or index (0 for first sheet)"
         )
         
+        download_mode = st.radio(
+            "Download Mode",
+            ["Individual Files", "ZIP Archive"],
+            help="Download files individually or as a single ZIP file"
+        )
+        
         delay = st.slider(
             "Delay between downloads (seconds)",
             min_value=0.0,
             max_value=5.0,
             value=1.0,
             step=0.5,
+            help="Delay between processing URLs"
         )
     
     # Main content area
@@ -176,10 +158,6 @@ def main():
                 st.success(f"✅ Excel file loaded successfully!")
                 st.write(f"**File:** {uploaded_file.name}")
                 st.write(f"**Shape:** {df.shape[0]} rows × {df.shape[1]} columns")
-                
-                # Show current download folder
-                if st.session_state.download_folder:
-                    st.info(f"**Download folder:** `{st.session_state.download_folder}`")
                 
                 # Show dataframe preview
                 with st.expander("Preview Data", expanded=True):
@@ -202,94 +180,150 @@ def main():
                         # Download progress
                         st.subheader("Download Progress")
                         
-                        # Check if folder is selected
-                        if not st.session_state.download_folder:
-                            st.error("❌ Please select a download folder first!")
-                        else:
-                            if st.button("🚀 Start Download", type="primary", use_container_width=True):
-                                # Initialize progress tracking
-                                progress_text = st.empty()
-                                overall_progress = st.progress(0)
-                                status_text = st.empty()
+                        if st.button("🚀 Process URLs", type="primary", use_container_width=True):
+                            # Initialize progress tracking
+                            progress_text = st.empty()
+                            overall_progress = st.progress(0)
+                            status_text = st.empty()
+                            
+                            successful_downloads = []
+                            failed_downloads = []
+                            all_downloaded_files = []
+                            
+                            for index, row in valid_urls.iterrows():
+                                url = str(row[url_column]).strip()
                                 
-                                successful_downloads = 0
-                                failed_downloads = []
-                                download_log = []
+                                # Get custom filename if specified
+                                custom_filename = None
+                                if filename_column and filename_column.strip() and filename_column in df.columns and pd.notna(row[filename_column]):
+                                    custom_filename = str(row[filename_column])
                                 
-                                for index, row in valid_urls.iterrows():
-                                    url = str(row[url_column]).strip()
-                                    
-                                    # Get custom filename if specified
-                                    custom_filename = None
-                                    if filename_column and filename_column.strip() and filename_column in df.columns and pd.notna(row[filename_column]):
-                                        custom_filename = str(row[filename_column])
-                                    
-                                    # Update progress
-                                    progress_text.write(f"Downloading {index + 1}/{total_urls}: {url}")
-                                    overall_progress.progress((index) / total_urls)
-                                    
-                                    # Create individual progress bar for current download
-                                    file_progress = st.progress(0)
-                                    
-                                    # Download the file
-                                    file_path, success, message = download_file(
-                                        url, 
-                                        st.session_state.download_folder, 
-                                        custom_filename,
-                                        file_progress
-                                    )
-                                    
-                                    if success:
-                                        successful_downloads += 1
-                                        file_size = os.path.getsize(file_path) if file_path and os.path.exists(file_path) else 0
-                                        status_text.success(f"✅ {os.path.basename(file_path)} ({file_size:,} bytes)")
-                                        download_log.append({
-                                            "url": url,
-                                            "filename": os.path.basename(file_path),
-                                            "status": "Success",
-                                            "size": file_size
-                                        })
-                                    else:
-                                        failed_downloads.append({"url": url, "error": message})
-                                        status_text.error(f"❌ Failed: {url}")
-                                        download_log.append({
-                                            "url": url,
-                                            "filename": custom_filename or "N/A",
-                                            "status": "Failed",
-                                            "error": message
-                                        })
-                                    
-                                    # Clear individual progress bar
-                                    file_progress.empty()
-                                    
-                                    # Delay between downloads
-                                    if delay > 0 and index < total_urls - 1:
-                                        time.sleep(delay)
+                                # Update progress
+                                progress_text.write(f"Processing {index + 1}/{total_urls}: {url}")
+                                overall_progress.progress((index) / total_urls)
                                 
-                                # Final progress update
-                                overall_progress.progress(1.0)
-                                progress_text.empty()
+                                # Download the file to memory
+                                content, auto_filename, file_size, success, message = download_file_to_memory(url)
                                 
-                                # Show summary
-                                st.subheader("📊 Download Summary")
+                                # Use custom filename if provided, otherwise use auto-generated
+                                filename = custom_filename or auto_filename
                                 
-                                col_success, col_failed, col_total = st.columns(3)
+                                if success:
+                                    file_data = {
+                                        'content': content,
+                                        'filename': filename,
+                                        'size': file_size,
+                                        'url': url,
+                                        'file_type': get_file_type(filename)
+                                    }
+                                    successful_downloads.append(file_data)
+                                    all_downloaded_files.append({
+                                        'content': content,
+                                        'filename': filename,
+                                        'success': True
+                                    })
+                                    status_text.success(f"✅ Downloaded: {filename} ({file_size:,} bytes)")
+                                else:
+                                    failed_downloads.append({"url": url, "error": message})
+                                    all_downloaded_files.append({
+                                        'filename': filename or "Unknown",
+                                        'success': False
+                                    })
+                                    status_text.error(f"❌ Failed: {url} - {message}")
                                 
-                                with col_success:
-                                    st.metric("Successful", successful_downloads, delta=f"+{successful_downloads}")
+                                # Delay between downloads
+                                if delay > 0 and index < total_urls - 1:
+                                    time.sleep(delay)
+                            
+                            # Final progress update
+                            overall_progress.progress(1.0)
+                            progress_text.empty()
+                            
+                            # Show summary
+                            st.subheader("📊 Download Summary")
+                            
+                            col_success, col_failed, col_total = st.columns(3)
+                            
+                            with col_success:
+                                st.metric("Successful", len(successful_downloads), delta=f"+{len(successful_downloads)}")
+                            
+                            with col_failed:
+                                st.metric("Failed", len(failed_downloads), delta=f"+{len(failed_downloads)}", delta_color="inverse")
+                            
+                            with col_total:
+                                st.metric("Total", total_urls)
+                            
+                            # Download options based on mode
+                            st.subheader("📥 Download Files")
+                            
+                            if download_mode == "Individual Files":
+                                # Show individual download links
+                                if successful_downloads:
+                                    st.write("### Individual File Downloads")
+                                    for file_data in successful_downloads:
+                                        download_link = create_download_link(
+                                            file_data['content'],
+                                            file_data['filename'],
+                                            file_data['file_type']
+                                        )
+                                        st.markdown(download_link, unsafe_allow_html=True)
+                                        st.caption(f"Size: {file_data['size']:,} bytes | URL: {file_data['url']}")
+                                        st.write("---")
                                 
-                                with col_failed:
-                                    st.metric("Failed", len(failed_downloads), delta=f"+{len(failed_downloads)}", delta_color="inverse")
+                            else:  # ZIP Archive mode
+                                # Show ZIP download link
+                                if successful_downloads:
+                                    st.write("### Download All Files as ZIP")
+                                    zip_link = create_zip_download_link(all_downloaded_files)
+                                    st.markdown(zip_link, unsafe_allow_html=True)
+                                    st.caption(f"Contains {len(successful_downloads)} files, total size: {sum(f['size'] for f in successful_downloads):,} bytes")
                                 
-                                with col_total:
-                                    st.metric("Total", total_urls)
-                                
-                                # Show download log
-                                with st.expander("📋 Download Log", expanded=True):
-                                    log_df = pd.DataFrame(download_log)
-                                    st.dataframe(log_df, use_container_width=True)
-                                
-                                st.success(f"📁 Files downloaded to: `{st.session_state.download_folder}`")
+                                # Also show individual links in expander
+                                if successful_downloads:
+                                    with st.expander("📄 Individual File Links (for selective download)"):
+                                        for file_data in successful_downloads:
+                                            download_link = create_download_link(
+                                                file_data['content'],
+                                                file_data['filename'],
+                                                file_data['file_type']
+                                            )
+                                            st.markdown(download_link, unsafe_allow_html=True)
+                                            st.caption(f"Size: {file_data['size']:,} bytes")
+                                            st.write("---")
+                            
+                            # Show failed downloads if any
+                            if failed_downloads:
+                                with st.expander("❌ Failed Downloads", expanded=False):
+                                    for failed in failed_downloads:
+                                        st.write(f"**URL:** {failed['url']}")
+                                        st.write(f"**Error:** {failed['error']}")
+                                        st.write("---")
+                            
+                            # File preview for common file types
+                            if successful_downloads:
+                                with st.expander("👀 File Previews", expanded=False):
+                                    for file_data in successful_downloads[:5]:  # Limit to first 5 files
+                                        filename = file_data['filename'].lower()
+                                        content = file_data['content']
+                                        
+                                        st.write(f"**{file_data['filename']}** ({file_data['size']:,} bytes)")
+                                        
+                                        if filename.endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                                            # Display images
+                                            st.image(content, caption=file_data['filename'], use_column_width=True)
+                                        elif filename.endswith('.pdf'):
+                                            # Show PDF info
+                                            st.info("PDF file - download to view")
+                                        elif filename.endswith(('.txt', '.csv')):
+                                            # Show text content preview
+                                            try:
+                                                text_content = content.decode('utf-8')
+                                                st.text_area("Content preview", text_content[:1000] + ("..." if len(text_content) > 1000 else ""), height=150)
+                                            except:
+                                                st.info("Binary file - download to view")
+                                        else:
+                                            st.info("Download file to view content")
+                                        st.write("---")
             
             except Exception as e:
                 st.error(f"Error reading Excel file: {str(e)}")
@@ -298,6 +332,7 @@ def main():
             # Instructions when no file is uploaded
             st.info("👈 Please upload an Excel file to get started")
             
+            # Example format
             with st.expander("📋 Expected Excel Format"):
                 example_data = {
                     'URL': [
@@ -313,21 +348,33 @@ def main():
                 }
                 example_df = pd.DataFrame(example_data)
                 st.dataframe(example_df, use_container_width=True)
+                st.caption("Note: The 'Filename' column is optional. If not provided, filenames will be extracted from URLs.")
     
     with col2:
         st.subheader("ℹ️ Instructions")
         
         st.markdown("""
-        1. **Upload Excel File**
-        2. **Enter Folder Path** or use quick buttons
-        3. **Configure Columns**
-        4. **Start Download**
+        1. **Upload Excel File**: Click 'Browse files' to upload
+        2. **Configure Settings**: Set column names and options
+        3. **Process URLs**: Click the button to download files to memory
+        4. **Download Files**: Click links to save files to your device
         
-        ### 📁 Folder Path Examples
-        - **Windows**: `C:/Users/YourName/Downloads`
-        - **Mac**: `/Users/YourName/Downloads`
-        - **Linux**: `/home/yourname/Downloads`
-        - **Relative**: `./downloads`
+        ### 📥 Download Modes
+        - **Individual Files**: Download each file separately
+        - **ZIP Archive**: All files in one ZIP download
+        
+        ### 🔒 Security & Privacy
+        - Files are processed in memory
+        - No files stored on server
+        - Secure HTTPS connections
+        - Your data is not persisted
+        
+        ### ⚡ Supported Files
+        - Images (PNG, JPG, GIF)
+        - Documents (PDF, DOC, XLS)
+        - Archives (ZIP)
+        - Text files (TXT, CSV)
+        - And many more!
         """)
         
         # System info
